@@ -1,0 +1,89 @@
+cmake_minimum_required(VERSION 3.9.1)
+project(libavc C CXX)
+enable_language(ASM)
+
+set (CMAKE_C_COMPILER clang)
+set (CMAKE_CXX_COMPILER clang++)
+set (_CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+set (_CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+set (CMAKE_C_FLAGS "${_CMAKE_C_FLAGS} -fsanitize-coverage=trace-pc-guard -fsanitize=address")
+set (CMAKE_CXX_FLAGS "${_CMAKE_CXX_FLAGS} -fsanitize-coverage=trace-pc-guard -fsanitize=address")
+
+set(AVC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
+set(AVC_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+option(ENABLE_MVC "Enables svcenc and svcdec builds" OFF)
+option(ENABLE_SVC "Enables svcenc and svcdec builds" OFF)
+
+if("${AVC_ROOT}" STREQUAL "${AVC_CONFIG_DIR}")
+  message(
+    FATAL_ERROR
+      "Building from within the libavc source tree is not supported.\n"
+      "Hint: Run these commands\n"
+      "$ rm -rf CMakeCache.txt CMakeFiles\n"
+      "$ mkdir -p ./build\n"
+      "$ cd ./build\n"
+      "And re-run CMake from the build directory.")
+endif()
+
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+find_package(Threads REQUIRED)
+
+set(CMAKE_STATIC_LIBRARY_PREFIX "")
+
+if(${CMAKE_CROSSCOMPILING})
+  set(THREADS_PTHREAD_ARG
+      "2"
+      CACHE STRING
+            "Refer https://gitlab.kitware.com/cmake/cmake/-/issues/16920" FORCE)
+endif()
+
+include("${AVC_ROOT}/cmake/utils.cmake")
+
+libavc_add_compile_options()
+libavc_add_definitions()
+libavc_set_link_libraries()
+
+include("${AVC_ROOT}/common/common.cmake")
+include("${AVC_ROOT}/decoder/libavcdec.cmake")
+if (${ENABLE_MVC})
+  include("${AVC_ROOT}/decoder/mvc/libmvcdec.cmake")
+endif()
+include("${AVC_ROOT}/encoder/libavcenc.cmake")
+if (${ENABLE_SVC})
+  include("${AVC_ROOT}/common/svccommon.cmake")
+  include("${AVC_ROOT}/encoder/svc/libsvcenc.cmake")
+  include("${AVC_ROOT}/decoder/svc/libsvcdec.cmake")
+endif()
+
+include("${AVC_ROOT}/test/decoder/avcdec.cmake")
+if (${ENABLE_MVC})
+  include("${AVC_ROOT}/test/mvcdec/mvcdec.cmake")
+endif()
+include("${AVC_ROOT}/test/encoder/avcenc.cmake")
+if (${ENABLE_SVC})
+  include("${AVC_ROOT}/test/svcenc/svcenc.cmake")
+  include("${AVC_ROOT}/test/svcdec/svcdec.cmake")
+endif()
+
+include("${AVC_ROOT}/fuzzer/avc_dec_fuzzer.cmake")
+if (${ENABLE_MVC})
+  include("${AVC_ROOT}/fuzzer/mvc_dec_fuzzer.cmake")
+endif()
+include("${AVC_ROOT}/fuzzer/avc_enc_fuzzer.cmake")
+if (${ENABLE_SVC})
+  include("${AVC_ROOT}/fuzzer/svc_enc_fuzzer.cmake")
+  include("${AVC_ROOT}/fuzzer/svc_dec_fuzzer.cmake")
+endif()
+
+add_library(afl_driver STATIC IMPORTED )
+set_target_properties(afl_driver PROPERTIES IMPORTED_LOCATION "${CMAKE_BINARY_DIR}/../afl-llvm-rt.o.o" )
+
+set(CMAKE_C_FLAGS "${_CMAKE_C_FLAGS} -g -fsanitize=address,fuzzer")
+set(CMAKE_CXX_FLAGS "${_CMAKE_CXX_FLAGS} -g -fsanitize=address,fuzzer")
+add_library(libavc_driver_lib "fuzzer/avc_dec_fuzzer_frame.cpp")
+target_link_libraries(libavc_driver_lib libavcdec)
+
+set(CMAKE_C_FLAGS "${_CMAKE_C_FLAGS} -g -fsanitize=leak,address")
+set(CMAKE_CXX_FLAGS "${_CMAKE_CXX_FLAGS} -g -fsanitize=leak,address")
+add_executable(avc_frame afl_driver.cpp)
+target_link_libraries(avc_frame libavcdec libavc_driver_lib afl_driver)
